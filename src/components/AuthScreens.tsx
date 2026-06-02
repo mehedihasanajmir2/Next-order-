@@ -90,8 +90,20 @@ export default function AuthScreens({ onEnterDemo }: AuthScreensProps) {
     try {
       await signInWithPopup(auth, provider);
     } catch (err: any) {
-      console.error(err);
-      setError('Google Sign In failed. Please try again.');
+      console.error('Google Auth Failed:', err);
+      let errorMsg = 'Google Sign-In failed.';
+      if (err.code === 'auth/popup-blocked') {
+        errorMsg += ' The sign-in popup was blocked by your browser. Please allow popups for this site, or open the app in a new tab.';
+      } else if (err.code === 'auth/unauthorized-domain') {
+        errorMsg += ' This domain is not authorized in the Firebase console. Please add this domain to Authorized Domains in your Firebase auth configuration.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        errorMsg += ' Google Sign-In is not enabled as an Authentication provider in your Firebase project console.';
+      } else if (err.message) {
+        errorMsg += ` ${err.message}`;
+      } else {
+        errorMsg += ' Please try again or use Email / Password signup.';
+      }
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -311,6 +323,19 @@ export default function AuthScreens({ onEnterDemo }: AuthScreensProps) {
               </svg>
               Sign In with Google
             </button>
+
+            {typeof window !== 'undefined' && window.self !== window.top && (
+              <div className="mt-4 p-3 bg-amber-50 rounded-xl border border-amber-100 text-[11px] text-amber-800 leading-relaxed font-medium">
+                💡 <strong className="font-semibold text-amber-900">আইফ্রেম সীমাবদ্ধতা (Iframe Limitation):</strong> 
+                <p className="mt-1">
+                  ব্রাউজার সিকিউরিটি পলিসির কারণে আইফ্রেমের ভেতরে সরাসরি গুগল লগইন কাজ নাও করতে পারে। আপনার সুবিধার জন্য নিচের যেকোনো একটি উপায় বেছে নিন:
+                </p>
+                <ul className="list-disc list-inside mt-1.5 space-y-1 text-amber-900/80 font-normal">
+                  <li>প্রিভিউ বারের <strong className="font-semibold">"Open in New Tab"</strong>-এ ক্লিক করে নতুন ট্যাবে অ্যাপটি খুলুন, সেখানে গুগল লগইন নিখুঁতভাবে কাজ করবে।</li>
+                  <li>অথবা ওপরের ফর্মে <strong className="font-semibold">Email & password</strong> দিয়ে অ্যাকাউন্ট তৈরি করে তাৎক্ষণিক লগইন করুন।</li>
+                </ul>
+              </div>
+            )}
 
           </motion.div>
 
