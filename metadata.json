@@ -1,0 +1,6 @@
+{
+  "name": "NextOrder",
+  "description": "An elegant, secure business order management platform. Track client orders, status, sizes, colors, delivery addresses, and contact numbers with custom private dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

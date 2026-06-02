@@ -1,0 +1,51 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "An order placed for a business product, tracking customer name, phone, size, color, quantity, price, and shipping details.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique ID of the business owner who managed this order." },
+        "customerName": { "type": "string", "description": "Name of the customer who ordered." },
+        "customerPhone": { "type": "string", "description": "Delivery contact phone number." },
+        "deliveryAddress": { "type": "string", "description": "Detailed shipping destination address." },
+        "productName": { "type": "string", "description": "Name of the ordered product." },
+        "quantity": { "type": "number", "description": "Quantity of the product ordered." },
+        "size": { "type": "string", "description": "Size of the product (e.g. S, M, L, XL, etc.)" },
+        "color": { "type": "string", "description": "Color of the product" },
+        "price": { "type": "number", "description": "Single unit price or total order value in Currency." },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered", "cancelled"], "description": "Current dispatch and fulfillment state of the order." },
+        "notes": { "type": "string", "description": "Additional custom delivery instructions or comments." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Order placement timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last modified timestamp." }
+      },
+      "required": ["userId", "customerName", "customerPhone", "deliveryAddress", "productName", "quantity", "size", "color", "price", "status", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A business catalog item containing naming, pricing, and variant options like sizes and colors.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique ID of the business owner defining this product." },
+        "name": { "type": "string", "description": "The brand or descriptive name of the item." },
+        "sku": { "type": "string", "description": "Stock Keeping Unit unique short code/ID." },
+        "price": { "type": "number", "description": "Retail price of a single unit." },
+        "sizeOptions": { "type": "array", "description": "List of available sizes for this product." },
+        "colorOptions": { "type": "array", "description": "List of available colors/finishes." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Catalog item creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last catalog edit timestamp." }
+      },
+      "required": ["userId", "name", "price", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders collection containing individual client orders managed by business owners."
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Catalog items/products collection managed by individual business owners."
+    }
+  }
+}

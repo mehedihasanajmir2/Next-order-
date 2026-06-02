@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Catch-all default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Order helper validation
+    function isValidOrder(data) {
+      return data.userId is string && data.userId == request.auth.uid
+        && data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 100
+        && data.customerPhone is string && data.customerPhone.size() > 0 && data.customerPhone.size() <= 30
+        && data.deliveryAddress is string && data.deliveryAddress.size() > 0 && data.deliveryAddress.size() <= 500
+        && data.productName is string && data.productName.size() > 0 && data.productName.size() <= 200
+        && data.quantity is int && data.quantity > 0
+        && data.size is string && data.size.size() <= 50
+        && data.color is string && data.color.size() <= 50
+        && (data.price is int || data.price is float) && data.price >= 0
+        && data.status in ['pending', 'processing', 'shipped', 'delivered', 'cancelled']
+        && (data.notes == null || (data.notes is string && data.notes.size() <= 1000));
+    }
+
+    // Product helper validation
+    function isValidProduct(data) {
+      return data.userId is string && data.userId == request.auth.uid
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && (data.sku == null || (data.sku is string && data.sku.size() <= 100))
+        && (data.price is int || data.price is float) && data.price >= 0
+        && (data.sizeOptions == null || (data.sizeOptions is list && data.sizeOptions.size() <= 20))
+        && (data.colorOptions == null || (data.colorOptions is list && data.colorOptions.size() <= 20));
+    }
+
+    // Rules for Orders
+    match /orders/{orderId} {
+      allow create: if isSignedIn() 
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().createdAt is string && incoming().createdAt.size() <= 50
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow update: if isSignedIn()
+        && isValidOrder(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // Rules for Products
+    match /products/{productId} {
+      allow create: if isSignedIn()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().createdAt is string && incoming().createdAt.size() <= 50
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow update: if isSignedIn()
+        && isValidProduct(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}
