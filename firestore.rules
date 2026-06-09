@@ -23,9 +23,16 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Shop helper validation
+    function isValidShop(data) {
+      return data.userId is string && data.userId == request.auth.uid
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100;
+    }
+
     // Order helper validation
     function isValidOrder(data) {
       return data.userId is string && data.userId == request.auth.uid
+        && (data.shopId == null || (data.shopId is string && data.shopId.size() <= 128))
         && data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 100
         && data.customerPhone is string && data.customerPhone.size() > 0 && data.customerPhone.size() <= 30
         && data.deliveryAddress is string && data.deliveryAddress.size() > 0 && data.deliveryAddress.size() <= 500
@@ -41,11 +48,45 @@ service cloud.firestore {
     // Product helper validation
     function isValidProduct(data) {
       return data.userId is string && data.userId == request.auth.uid
+        && (data.shopId == null || (data.shopId is string && data.shopId.size() <= 128))
         && data.name is string && data.name.size() > 0 && data.name.size() <= 200
         && (data.sku == null || (data.sku is string && data.sku.size() <= 100))
         && (data.price is int || data.price is float) && data.price >= 0
         && (data.sizeOptions == null || (data.sizeOptions is list && data.sizeOptions.size() <= 20))
         && (data.colorOptions == null || (data.colorOptions is list && data.colorOptions.size() <= 20));
+    }
+
+    // Ledger helper validation
+    function isValidLedger(data) {
+      return data.userId is string && data.userId == request.auth.uid
+        && data.shopId is string && data.shopId.size() <= 128
+        && data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 100
+        && data.customerPhone is string && data.customerPhone.size() > 0 && data.customerPhone.size() <= 30
+        && data.type in ['receive', 'give']
+        && (data.amount is int || data.amount is float) && data.amount >= 0
+        && data.reason is string && data.reason.size() <= 500
+        && data.entryDate is string && data.entryDate.size() <= 50;
+    }
+
+    // Rules for Shops
+    match /shops/{shopId} {
+      allow create: if isSignedIn()
+        && isValidId(shopId)
+        && isValidShop(incoming())
+        && incoming().createdAt is string && incoming().createdAt.size() <= 50
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && isValidShop(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
     }
 
     // Rules for Orders
@@ -84,6 +125,28 @@ service cloud.firestore {
       
       allow update: if isSignedIn()
         && isValidProduct(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // Rules for Ledger (TaliKhata)
+    match /ledger/{entryId} {
+      allow create: if isSignedIn()
+        && isValidId(entryId)
+        && isValidLedger(incoming())
+        && incoming().createdAt is string && incoming().createdAt.size() <= 50
+        && incoming().updatedAt is string && incoming().updatedAt.size() <= 50;
+        
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow update: if isSignedIn()
+        && isValidLedger(incoming())
         && existing().userId == request.auth.uid
         && incoming().userId == existing().userId
         && incoming().createdAt == existing().createdAt

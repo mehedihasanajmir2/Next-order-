@@ -1,6 +1,7 @@
 export interface Order {
   id: string;
   userId: string;
+  shopId?: string; // Optional for backward compatibility but required for new orders per shop
   customerName: string;
   customerPhone: string;
   deliveryAddress: string;
@@ -22,11 +23,34 @@ export interface Order {
 export interface Product {
   id: string;
   userId: string;
+  shopId?: string; // Optional for backward compatibility but required for new products per shop
   name: string;
   sku?: string;
   price: number;
   sizeOptions?: string[];
   colorOptions?: string[];
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface Shop {
+  id: string;
+  userId: string;
+  name: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface LedgerEntry {
+  id: string;
+  userId: string;
+  shopId: string;
+  customerName: string;
+  customerPhone: string;
+  type: 'receive' | 'give'; // receive = pabo/baki nise (amount due from them), give = dibo/shodh (payment/received)
+  amount: number;
+  reason: string;
+  entryDate: string; // Date of the credit or payment
   createdAt: any;
   updatedAt: any;
 }
@@ -37,3 +61,4 @@ export interface UserSession {
   displayName: string | null;
   isDemo: boolean;
 }
+

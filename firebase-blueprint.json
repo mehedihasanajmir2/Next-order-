@@ -1,11 +1,24 @@
 {
   "entities": {
+    "Shop": {
+      "title": "Shop",
+      "description": "A customer-defined business profile or shop, allowing developers/merchants to run multiple isolated shops under one login.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique ID of the merchant who owns this shop." },
+        "name": { "type": "string", "description": "The custom name of this specific store." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Shop creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Shop last modified timestamp." }
+      },
+      "required": ["userId", "name", "createdAt", "updatedAt"]
+    },
     "Order": {
       "title": "Order",
       "description": "An order placed for a business product, tracking customer name, phone, size, color, quantity, price, and shipping details.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "The unique ID of the business owner who managed this order." },
+        "shopId": { "type": "string", "description": "The specific shop ID isolating this order." },
         "customerName": { "type": "string", "description": "Name of the customer who ordered." },
         "customerPhone": { "type": "string", "description": "Delivery contact phone number." },
         "deliveryAddress": { "type": "string", "description": "Detailed shipping destination address." },
@@ -27,6 +40,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "The unique ID of the business owner defining this product." },
+        "shopId": { "type": "string", "description": "The specific shop ID isolating this catalog item." },
         "name": { "type": "string", "description": "The brand or descriptive name of the item." },
         "sku": { "type": "string", "description": "Stock Keeping Unit unique short code/ID." },
         "price": { "type": "number", "description": "Retail price of a single unit." },
@@ -36,16 +50,42 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last catalog edit timestamp." }
       },
       "required": ["userId", "name", "price", "createdAt", "updatedAt"]
+    },
+    "LedgerEntry": {
+      "title": "LedgerEntry",
+      "description": "A credit or payment due record (TaliKhata) for tracking merchant receivables/payments.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique ID of the merchant who managed the ledger entry." },
+        "shopId": { "type": "string", "description": "The specific shop ID isolating this ledger record." },
+        "customerName": { "type": "string", "description": "Name of the customer or vendor party." },
+        "customerPhone": { "type": "string", "description": "Contact phone number of the target customer/party." },
+        "type": { "type": "string", "enum": ["receive", "give"], "description": "Transaction direction: receive (pabo/due) or give (dibo/paid)." },
+        "amount": { "type": "number", "description": "The transaction amount in Currency." },
+        "reason": { "type": "string", "description": "Purpose or descriptive reason for the credit/payment." },
+        "entryDate": { "type": "string", "description": "The transaction date when the customer took or gave money." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Ledger entry registration timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last ledger edit timestamp." }
+      },
+      "required": ["userId", "shopId", "customerName", "customerPhone", "type", "amount", "reason", "entryDate", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
+    "/shops/{shopId}": {
+      "schema": "Shop",
+      "description": "Isolated business profiles managed by merchants."
+    },
     "/orders/{orderId}": {
       "schema": "Order",
-      "description": "Orders collection containing individual client orders managed by business owners."
+      "description": "Orders collection containing individual client orders managed by business owners, separated by shopId."
     },
     "/products/{productId}": {
       "schema": "Product",
-      "description": "Catalog items/products collection managed by individual business owners."
+      "description": "Catalog items/products collection managed by individual business owners, separated by shopId."
+    },
+    "/ledger/{entryId}": {
+      "schema": "LedgerEntry",
+      "description": "Ledger entries/records for keeping track of credits and payments under specific shops."
     }
   }
 }

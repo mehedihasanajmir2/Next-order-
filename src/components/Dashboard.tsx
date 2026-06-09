@@ -11,7 +11,7 @@ import {
 } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { db, auth, OperationType, handleFirestoreError } from '../firebase';
-import { Order, Product, UserSession } from '../types';
+import { Order, Product, UserSession, Shop, LedgerEntry } from '../types';
 import { DEMO_ORDERS, DEMO_PRODUCTS } from '../demoData';
 import { motion, AnimatePresence } from 'motion/react';
 import { LANGUAGES, TRANSLATIONS, LanguageCode } from '../translations';
@@ -83,9 +83,10 @@ const generateUniqueOrderIdForSubmit = (existingOrders: Order[]): string => {
 interface DashboardProps {
   userSession: UserSession;
   onExitDemo: () => void;
+  onUpdateShopName?: (newName: string) => Promise<void> | void;
 }
 
-export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
+export default function Dashboard({ userSession, onExitDemo, onUpdateShopName }: DashboardProps) {
   const isDemo = userSession.isDemo;
 
   const [lang, setLang] = useState<LanguageCode>(() => {
@@ -100,13 +101,22 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
   // Real Data states
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+
+  // Multiple Shops State
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [activeShop, setActiveShop] = useState<Shop | null>(null);
+  const [showAddShopInput, setShowAddShopInput] = useState(false);
+  const [newShopNameInputForm, setNewShopNameInputForm] = useState('');
+  const [isCreatingShop, setIsCreatingShop] = useState(false);
   
   // Loading & error handling
   const [loading, setLoading] = useState(!isDemo);
   const [errorHeader, setErrorHeader] = useState<string | null>(null);
 
-  // Tab control: 'orders' | 'products'
-  const [activeTab, setActiveTab] = useState<'orders' | 'products'>('orders');
+  // Tab control: 'orders' | 'products' | 'ledger'
+  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'ledger'>('orders');
 
   // Search and filter operations
   const [searchQuery, setSearchQuery] = useState('');
@@ -140,6 +150,131 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
 
+  // Shop Name Edit states
+  const [isEditingShopName, setIsEditingShopName] = useState(false);
+  const [newShopNameInput, setNewShopNameInput] = useState('');
+  const [isSavingShopName, setIsSavingShopName] = useState(false);
+
+  // Individual Shop Name Edit states
+  const [editingShopId, setEditingShopId] = useState<string | null>(null);
+  const [editingShopName, setEditingShopName] = useState('');
+  const [isUpdatingShop, setIsUpdatingShop] = useState(false);
+
+  const handleUpdateSingleShopName = async (shopId: string, newName: string) => {
+    const cleanName = newName.trim();
+    if (!cleanName) return;
+
+    setIsUpdatingShop(true);
+    try {
+      if (isDemo) {
+        const updatedShops = shops.map(s => s.id === shopId ? { ...s, name: cleanName, updatedAt: new Date().toISOString() } : s);
+        setShops(updatedShops);
+        localStorage.setItem('nextorder_demo_shops', JSON.stringify(updatedShops));
+        if (activeShop?.id === shopId) {
+          setActiveShop({ ...activeShop, name: cleanName });
+        }
+      } else {
+        await setDoc(doc(db, 'shops', shopId), {
+          userId: userSession.uid,
+          name: cleanName,
+          createdAt: new Date().toISOString(), // Keep track if we don't have it
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        
+        if (activeShop?.id === shopId) {
+          setActiveShop(prev => prev ? { ...prev, name: cleanName } : null);
+        }
+      }
+      setEditingShopId(null);
+    } catch (err) {
+      console.error("Error updating single shop name:", err);
+      alert(lang === 'bn' ? 'দোকানের নাম পরিবর্তন করা যায়নি।' : 'Could not change shop name.');
+    } finally {
+      setIsUpdatingShop(false);
+    }
+  };
+
+  const handleSaveShopName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = newShopNameInput.trim();
+    if (!cleanName || !activeShop) return;
+
+    setIsSavingShopName(true);
+    try {
+      if (isDemo) {
+        const updatedShops = shops.map(s => s.id === activeShop.id ? { ...s, name: cleanName, updatedAt: new Date().toISOString() } : s);
+        setShops(updatedShops);
+        localStorage.setItem('nextorder_demo_shops', JSON.stringify(updatedShops));
+        setActiveShop({ ...activeShop, name: cleanName });
+      } else {
+        await setDoc(doc(db, 'shops', activeShop.id), {
+          userId: userSession.uid,
+          name: cleanName,
+          createdAt: activeShop.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      }
+      
+      if (onUpdateShopName) {
+        await onUpdateShopName(cleanName);
+      }
+      setIsEditingShopName(false);
+    } catch (err) {
+      console.error(err);
+      alert(lang === 'bn' ? 'দোকানের নাম পরিবর্তন করা যায়নি।' : 'Could not change shop name.');
+    } finally {
+      setIsSavingShopName(false);
+    }
+  };
+
+  const handleCreateShop = async (shopName: string) => {
+    const cleanName = shopName.trim();
+    if (!cleanName) return;
+
+    setIsCreatingShop(true);
+    const newShopId = 'shop_' + Math.random().toString(36).substr(2, 9);
+    const newShop: Shop = {
+      id: newShopId,
+      userId: isDemo ? 'demo' : userSession.uid,
+      name: cleanName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (isDemo) {
+      const updatedShops = [...shops, newShop];
+      setShops(updatedShops);
+      localStorage.setItem('nextorder_demo_shops', JSON.stringify(updatedShops));
+      
+      setActiveShop(newShop);
+      localStorage.setItem('nextorder_demo_active_shop_id', newShopId);
+      
+      setIsCreatingShop(false);
+      setShowAddShopInput(false);
+      setNewShopNameInputForm('');
+    } else {
+      try {
+        await setDoc(doc(db, 'shops', newShopId), {
+          userId: newShop.userId,
+          name: newShop.name,
+          createdAt: newShop.createdAt,
+          updatedAt: newShop.updatedAt
+        });
+        
+        localStorage.setItem(`nextorder_active_shop_id_${userSession.uid}`, newShopId);
+        
+        setShowAddShopInput(false);
+        setNewShopNameInputForm('');
+      } catch (err) {
+        console.error("Error creating shop in Firestore:", err);
+        handleFirestoreError(err, OperationType.WRITE, 'shops');
+        alert(lang === 'bn' ? 'দোকান তৈরি করা যায়নি।' : 'Could not create shop.');
+      } finally {
+        setIsCreatingShop(false);
+      }
+    }
+  };
+
   // Form states - Add Product
   const [productNameInput, setProductNameInput] = useState('');
   const [productSku, setProductSku] = useState('');
@@ -147,23 +282,204 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
   const [productSizes, setProductSizes] = useState('');
   const [productColors, setProductColors] = useState('');
 
+  // Ledger (TaliKhata) form and core list states
+  const [allLedgerEntries, setAllLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [showLedgerModal, setShowLedgerModal] = useState(false);
+  const [ledgerCustomerName, setLedgerCustomerName] = useState('');
+  const [ledgerCustomerPhone, setLedgerCustomerPhone] = useState('');
+  const [ledgerType, setLedgerType] = useState<'receive' | 'give'>('receive');
+  const [ledgerAmount, setLedgerAmount] = useState<number>(0);
+  const [ledgerReason, setLedgerReason] = useState('');
+  const [ledgerDate, setLedgerDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedLedgerCustomer, setSelectedLedgerCustomer] = useState<string | null>(null);
+  const [isSavingLedger, setIsSavingLedger] = useState(false);
+  const [ledgerSearchQuery, setLedgerSearchQuery] = useState('');
+
+  const resetLedgerForm = () => {
+    setLedgerCustomerName('');
+    setLedgerCustomerPhone('');
+    setLedgerType('receive');
+    setLedgerAmount(0);
+    setLedgerReason('');
+    setLedgerDate(new Date().toISOString().split('T')[0]);
+  };
+
+  const handleCreateLedgerEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeShop) return;
+
+    const trimmedName = ledgerCustomerName.trim();
+    const trimmedPhone = ledgerCustomerPhone.trim();
+    const trimmedReason = ledgerReason.trim();
+
+    if (!trimmedName || !trimmedPhone || ledgerAmount <= 0) {
+      alert(lang === 'bn' ? 'দয়া করে সবগুলো তথ্য সঠিকভাবে পূরণ করুন!' : 'Please fill out all fields correctly!');
+      return;
+    }
+
+    setIsSavingLedger(true);
+
+    const newEntryId = 'ledger_' + Math.random().toString(36).substring(2, 11);
+    const newEntry: LedgerEntry = {
+      id: newEntryId,
+      userId: isDemo ? 'demo' : userSession.uid,
+      shopId: activeShop.id,
+      customerName: trimmedName,
+      customerPhone: trimmedPhone,
+      type: ledgerType,
+      amount: Number(ledgerAmount),
+      reason: trimmedReason || (lang === 'bn' ? 'সাধারণ বাকি / আদায়' : 'General Credit / Payment'),
+      entryDate: ledgerDate || new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (isDemo) {
+      const updatedEntries = [newEntry, ...allLedgerEntries];
+      setAllLedgerEntries(updatedEntries);
+      localStorage.setItem('nextorder_demo_ledger_entries', JSON.stringify(updatedEntries));
+      setIsSavingLedger(false);
+      setShowLedgerModal(false);
+      resetLedgerForm();
+    } else {
+      try {
+        await setDoc(doc(db, 'ledger', newEntryId), {
+          userId: newEntry.userId,
+          shopId: newEntry.shopId,
+          customerName: newEntry.customerName,
+          customerPhone: newEntry.customerPhone,
+          type: newEntry.type,
+          amount: newEntry.amount,
+          reason: newEntry.reason,
+          entryDate: newEntry.entryDate,
+          createdAt: newEntry.createdAt,
+          updatedAt: newEntry.updatedAt
+        });
+        setShowLedgerModal(false);
+        resetLedgerForm();
+      } catch (err) {
+        console.error("Error creating ledger entry in Firestore:", err);
+        handleFirestoreError(err, OperationType.WRITE, 'ledger');
+        alert(lang === 'bn' ? 'লেনদেন যোগ করতে সমস্যা হয়েছে!' : 'Error adding ledger entry.');
+      } finally {
+        setIsSavingLedger(false);
+      }
+    }
+  };
+
+  const handleDeleteLedgerEntry = async (entryId: string) => {
+    if (!confirm(lang === 'bn' ? 'আপনি কি এই লেনদেনের হিসাবটি ডিলিট করতে চান?' : 'Are you sure you want to delete this ledger entry?')) return;
+
+    if (isDemo) {
+      const updatedEntries = allLedgerEntries.filter(e => e.id !== entryId);
+      setAllLedgerEntries(updatedEntries);
+      localStorage.setItem('nextorder_demo_ledger_entries', JSON.stringify(updatedEntries));
+    } else {
+      try {
+        await deleteDoc(doc(db, 'ledger', entryId));
+      } catch (err) {
+        console.error("Error deleting ledger entry:", err);
+        handleFirestoreError(err, OperationType.DELETE, `ledger/${entryId}`);
+        alert('Could not delete ledger entry.');
+      }
+    }
+  };
+
   // Local storage caching for interactive Demo Sandboxing
   useEffect(() => {
-    if (isDemo) {
-      const cachedOrders = localStorage.getItem('nextorder_demo_orders');
-      const cachedProducts = localStorage.getItem('nextorder_demo_products');
+    if (!isDemo) return;
 
-      if (cachedOrders && cachedProducts) {
-        setOrders(JSON.parse(cachedOrders));
-        setProducts(JSON.parse(cachedProducts));
-      } else {
-        setOrders(DEMO_ORDERS);
-        setProducts(DEMO_PRODUCTS);
-        localStorage.setItem('nextorder_demo_orders', JSON.stringify(DEMO_ORDERS));
-        localStorage.setItem('nextorder_demo_products', JSON.stringify(DEMO_PRODUCTS));
-      }
-      setLoading(false);
+    // Load demo shops
+    const cachedShops = localStorage.getItem('nextorder_demo_shops');
+    let demoShopsList: Shop[] = [];
+    if (cachedShops) {
+      demoShopsList = JSON.parse(cachedShops);
+    } else {
+      demoShopsList = [
+        { id: 'shop-abc', userId: 'demo', name: 'Elite Fashion Store', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        { id: 'shop-xyz', userId: 'demo', name: 'NextOrder BD Corner', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+      ];
+      localStorage.setItem('nextorder_demo_shops', JSON.stringify(demoShopsList));
     }
+    setShops(demoShopsList);
+
+    // active shop
+    const savedActiveShopId = localStorage.getItem('nextorder_demo_active_shop_id');
+    let foundShop = demoShopsList.find(s => s.id === savedActiveShopId);
+    if (!foundShop) {
+      foundShop = demoShopsList[0];
+      localStorage.setItem('nextorder_demo_active_shop_id', foundShop.id);
+    }
+    setActiveShop(foundShop);
+
+    // load demo orders and products
+    const cachedOrders = localStorage.getItem('nextorder_demo_orders');
+    const cachedProducts = localStorage.getItem('nextorder_demo_products');
+
+    if (cachedOrders && cachedProducts) {
+      setAllOrders(JSON.parse(cachedOrders));
+      setAllProducts(JSON.parse(cachedProducts));
+    } else {
+      // Assign legacy items to first demo shop
+      const demoProductsTagged = DEMO_PRODUCTS.map(p => ({ ...p, shopId: 'shop-abc' }));
+      const demoOrdersTagged = DEMO_ORDERS.map(o => ({ ...o, shopId: 'shop-abc' }));
+      setAllOrders(demoOrdersTagged);
+      setAllProducts(demoProductsTagged);
+      localStorage.setItem('nextorder_demo_orders', JSON.stringify(demoOrdersTagged));
+      localStorage.setItem('nextorder_demo_products', JSON.stringify(demoProductsTagged));
+    }
+
+    const cachedLedger = localStorage.getItem('nextorder_demo_ledger_entries');
+    if (cachedLedger) {
+      setAllLedgerEntries(JSON.parse(cachedLedger));
+    } else {
+      const demoLedger: LedgerEntry[] = [
+        {
+          id: 'ledger-1',
+          userId: 'demo',
+          shopId: 'shop-abc',
+          customerName: 'Abul Kalam',
+          customerPhone: '01711122233',
+          type: 'receive',
+          amount: 500,
+          reason: 'শার্ট ও জিন্স প্যান্ট বাকিতে ক্রয়',
+          entryDate: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'ledger-2',
+          userId: 'demo',
+          shopId: 'shop-abc',
+          customerName: 'Karim Rahman',
+          customerPhone: '01822233344',
+          type: 'receive',
+          amount: 1500,
+          reason: 'জ্যাকেট ও গ্যাবার্ডিন প্যান্ট বকেয়া',
+          entryDate: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'ledger-3',
+          userId: 'demo',
+          shopId: 'shop-abc',
+          customerName: 'Abul Kalam',
+          customerPhone: '01711122233',
+          type: 'give',
+          amount: 200,
+          reason: 'কিছু অংশ পরিশোধ',
+          entryDate: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ];
+      setAllLedgerEntries(demoLedger);
+      localStorage.setItem('nextorder_demo_ledger_entries', JSON.stringify(demoLedger));
+    }
+
+    setLoading(false);
   }, [isDemo]);
 
   // Real-time Database listeners for Firestore
@@ -173,7 +489,65 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     setLoading(true);
     const uid = userSession.uid;
 
-    // Real-time listener for products to build dynamic product select dropdowns first
+    // Real-time listener for user shops
+    const shopsPath = 'shops';
+    const shopsQuery = query(collection(db, shopsPath), where('userId', '==', uid));
+    
+    const unsubscribeShops = onSnapshot(shopsQuery, async (snapshot) => {
+      const slist: Shop[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        slist.push({
+          id: docSnap.id,
+          userId: data.userId,
+          name: data.name,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt
+        });
+      });
+      
+      if (slist.length === 0) {
+        // Automatically create a default shop!
+        const defaultShopId = 'shop_' + Math.random().toString(36).substr(2, 9);
+        const savedShopName = userSession.displayName || 'আমার দোকান';
+        setLoading(true);
+        try {
+          await setDoc(doc(db, 'shops', defaultShopId), {
+            userId: uid,
+            name: savedShopName,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+        } catch (err) {
+          console.error("Error creating default shop:", err);
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+      
+      // Sort shops chronologically
+      slist.sort((a, b) => {
+        const timeA = new Date(a.createdAt).getTime();
+        const timeB = new Date(b.createdAt).getTime();
+        return timeA - timeB;
+      });
+      
+      setShops(slist);
+      
+      const savedActiveShopId = localStorage.getItem(`nextorder_active_shop_id_${uid}`);
+      let foundShop = slist.find(s => s.id === savedActiveShopId);
+      if (!foundShop) {
+        foundShop = slist[0];
+        localStorage.setItem(`nextorder_active_shop_id_${uid}`, foundShop.id);
+      }
+      setActiveShop(foundShop);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'shops');
+      setErrorHeader('Unable to load shop profiles.');
+    });
+
+    // Real-time listener for products
     const productsPath = 'products';
     const productsQuery = query(collection(db, productsPath), where('userId', '==', uid));
     
@@ -184,6 +558,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
         plist.push({
           id: docSnap.id,
           userId: data.userId,
+          shopId: data.shopId,
           name: data.name,
           sku: data.sku,
           price: data.price,
@@ -193,13 +568,12 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
           updatedAt: data.updatedAt
         });
       });
-      // Sort in memory by createdAt ISO or Timestamp
       plist.sort((a, b) => {
         const timeA = typeof a.createdAt?.toMillis === 'function' ? a.createdAt.toMillis() : new Date(a.createdAt).getTime();
         const timeB = typeof b.createdAt?.toMillis === 'function' ? b.createdAt.toMillis() : new Date(b.createdAt).getTime();
         return timeB - timeA;
       });
-      setProducts(plist);
+      setAllProducts(plist);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, productsPath);
       setErrorHeader('Unable to load products. Connection failed.');
@@ -216,6 +590,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
         olist.push({
           id: docSnap.id,
           userId: data.userId,
+          shopId: data.shopId,
           customerName: data.customerName,
           customerPhone: data.customerPhone,
           deliveryAddress: data.deliveryAddress,
@@ -234,13 +609,12 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
           updatedAt: data.updatedAt
         });
       });
-      // Sort in memory securely
       olist.sort((a, b) => {
         const timeA = typeof a.createdAt?.toMillis === 'function' ? a.createdAt.toMillis() : new Date(a.createdAt).getTime();
         const timeB = typeof b.createdAt?.toMillis === 'function' ? b.createdAt.toMillis() : new Date(b.createdAt).getTime();
         return timeB - timeA;
       });
-      setOrders(olist);
+      setAllOrders(olist);
       setLoading(false);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, ordersPath);
@@ -248,16 +622,81 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
       setLoading(false);
     });
 
+    // Real-time listener for ledger entries (TaliKhata)
+    const ledgerPath = 'ledger';
+    const ledgerQuery = query(collection(db, ledgerPath), where('userId', '==', uid));
+    const unsubscribeLedger = onSnapshot(ledgerQuery, (snapshot) => {
+      const llist: LedgerEntry[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        llist.push({
+          id: docSnap.id,
+          userId: data.userId,
+          shopId: data.shopId,
+          customerName: data.customerName,
+          customerPhone: data.customerPhone,
+          type: data.type as 'give' | 'receive',
+          amount: data.amount,
+          reason: data.reason,
+          entryDate: data.entryDate,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt
+        });
+      });
+      llist.sort((a, b) => {
+        const timeA = typeof a.createdAt?.toMillis === 'function' ? a.createdAt.toMillis() : new Date(a.createdAt).getTime();
+        const timeB = typeof b.createdAt?.toMillis === 'function' ? b.createdAt.toMillis() : new Date(b.createdAt).getTime();
+        return timeB - timeA;
+      });
+      setAllLedgerEntries(llist);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, ledgerPath);
+      setErrorHeader('Unable to load ledger entries.');
+    });
+
     return () => {
+      unsubscribeShops();
       unsubscribeProducts();
       unsubscribeOrders();
+      unsubscribeLedger();
     };
   }, [isDemo, userSession.uid]);
 
+  // Synchronize orders, products and ledger entries based on selected activeShop
+  useEffect(() => {
+    if (!activeShop) {
+      setOrders([]);
+      setProducts([]);
+      setLedgerEntries([]);
+      return;
+    }
+
+    const defaultShopId = shops[0]?.id || activeShop.id;
+
+    const filteredProducts = allProducts.filter(p => {
+      const pShopId = p.shopId || defaultShopId;
+      return pShopId === activeShop.id;
+    });
+
+    const filteredOrders = allOrders.filter(o => {
+      const oShopId = o.shopId || defaultShopId;
+      return oShopId === activeShop.id;
+    });
+
+    const filteredLedger = allLedgerEntries.filter(l => {
+      const lShopId = l.shopId || defaultShopId;
+      return lShopId === activeShop.id;
+    });
+
+    setOrders(filteredOrders);
+    setProducts(filteredProducts);
+    setLedgerEntries(filteredLedger);
+  }, [allProducts, allOrders, allLedgerEntries, activeShop, shops]);
+
   // Sync state helpers to handle Local Storage updates for Demo Mode
   const updateDemoState = (newOrders: Order[], newProducts: Product[]) => {
-    setOrders(newOrders);
-    setProducts(newProducts);
+    setAllOrders(newOrders);
+    setAllProducts(newProducts);
     localStorage.setItem('nextorder_demo_orders', JSON.stringify(newOrders));
     localStorage.setItem('nextorder_demo_products', JSON.stringify(newProducts));
   };
@@ -320,6 +759,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     const newProductData: Product = {
       id: nextProductId,
       userId: isDemo ? 'demo' : userSession.uid,
+      shopId: activeShop?.id || undefined,
       name: productNameInput,
       sku: productSku || 'N/A',
       price: Number(productPrice),
@@ -330,8 +770,8 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     };
 
     if (isDemo) {
-      const updatedProducts = [newProductData, ...products];
-      updateDemoState(orders, updatedProducts);
+      const updatedProducts = [newProductData, ...allProducts];
+      updateDemoState(allOrders, updatedProducts);
       setShowProductModal(false);
       resetProductForm();
     } else {
@@ -339,6 +779,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
       try {
         await setDoc(doc(db, pathname, nextProductId), {
           userId: newProductData.userId,
+          shopId: newProductData.shopId || '',
           name: newProductData.name,
           sku: newProductData.sku,
           price: newProductData.price,
@@ -441,6 +882,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     const newOrderData: Order = {
       id: nextOrderId,
       userId: isDemo ? 'demo' : userSession.uid,
+      shopId: activeShop?.id || undefined,
       customerName,
       customerPhone,
       deliveryAddress,
@@ -460,8 +902,8 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     };
 
     if (isDemo) {
-      const updatedOrders = [newOrderData, ...orders];
-      updateDemoState(updatedOrders, products);
+      const updatedOrders = [newOrderData, ...allOrders];
+      updateDemoState(updatedOrders, allProducts);
       setShowOrderModal(false);
       resetOrderForm();
     } else {
@@ -469,6 +911,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
       try {
         await setDoc(doc(db, pathname, nextOrderId), {
           userId: newOrderData.userId,
+          shopId: newOrderData.shopId || '',
           customerName: newOrderData.customerName,
           customerPhone: newOrderData.customerPhone,
           deliveryAddress: newOrderData.deliveryAddress,
@@ -521,13 +964,13 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
   // Operation: Delete Order
   const handleDeleteOrder = async (orderId: string) => {
     const confirmationMsg = lang === 'bn'
-      ? 'আপনি কি নিশ্চিত যে আপনি এই অর্ডারটি স্থায়ীভাবে মুছে ফেলতে চান?'
-      : 'Are you absolutely sure you want to permanently delete this order record?';
+      ? 'আপনি কি নিশ্চিত যে আপনি এই অর্ডারটি চিরতরে মুছে ফেলতে চান?'
+      : 'Are you sure you want to permanently delete this order?';
     if (!confirm(confirmationMsg)) return;
 
     if (isDemo) {
-      const updatedOrders = orders.filter(o => o.id !== orderId);
-      updateDemoState(updatedOrders, products);
+      const updatedOrders = allOrders.filter(o => o.id !== orderId);
+      updateDemoState(updatedOrders, allProducts);
       setSelectedOrderDetail(null);
     } else {
       const pathname = `orders/${orderId}`;
@@ -544,7 +987,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     }
   };
 
-  // Operation: Delete Product
+    // Operation: Delete Product
   const handleDeleteProduct = async (productId: string, name: string) => {
     const confirmationMsg = lang === 'bn'
       ? `আপনি কি নিশ্চিত যে আপনি ক্যাটালগ থেকে "${name}" প্রোডাক্টটি চিরতরে মুছে ফেলতে চান?`
@@ -552,8 +995,8 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     if (!confirm(confirmationMsg)) return;
 
     if (isDemo) {
-      const updatedProducts = products.filter(p => p.id !== productId);
-      updateDemoState(orders, updatedProducts);
+      const updatedProducts = allProducts.filter(p => p.id !== productId);
+      updateDemoState(allOrders, updatedProducts);
     } else {
       const pathname = `products/${productId}`;
       try {
@@ -571,13 +1014,13 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
   // Quick State Status change on order
   const handleUpdateOrderStatus = async (orderId: string, newStatus: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled') => {
     if (isDemo) {
-      const updatedOrders = orders.map(o => {
+      const updatedOrders = allOrders.map(o => {
         if (o.id === orderId) {
           return { ...o, status: newStatus, updatedAt: new Date().toISOString() };
         }
         return o;
       });
-      updateDemoState(updatedOrders, products);
+      updateDemoState(updatedOrders, allProducts);
       if (selectedOrderDetail && selectedOrderDetail.id === orderId) {
         setSelectedOrderDetail({ ...selectedOrderDetail, status: newStatus, updatedAt: new Date().toISOString() });
       }
@@ -642,6 +1085,78 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
     return matchesSearch && matchesStatus;
   });
 
+  // Group ledger entries by unique Customer Phone to track credit history
+  const ledgerCustomers = React.useMemo(() => {
+    const map: Record<string, { name: string; phone: string; totalReceive: number; totalGive: number; latestDate: string; entries: LedgerEntry[] }> = {};
+    
+    ledgerEntries.forEach(entry => {
+      const key = `${entry.customerPhone.trim()}`;
+      if (!map[key]) {
+        map[key] = {
+          name: entry.customerName,
+          phone: entry.customerPhone,
+          totalReceive: 0,
+          totalGive: 0,
+          latestDate: entry.entryDate,
+          entries: []
+        };
+      }
+      if (entry.customerName && entry.customerName.trim().length > 0) {
+        map[key].name = entry.customerName;
+      }
+      
+      if (entry.type === 'receive') {
+        map[key].totalReceive += entry.amount;
+      } else {
+        map[key].totalGive += entry.amount;
+      }
+      map[key].entries.push(entry);
+      
+      if (new Date(entry.entryDate) > new Date(map[key].latestDate)) {
+        map[key].latestDate = entry.entryDate;
+      }
+    });
+
+    return Object.values(map).map(c => {
+      c.entries.sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
+      return c;
+    });
+  }, [ledgerEntries]);
+
+  // Compute ledger dashboard stats for active shop
+  const ledgerStats = React.useMemo(() => {
+    let activePabo = 0; // They owe us
+    let activeDibo = 0; // We owe them
+    let totalPaid = 0; // Total collected
+
+    ledgerCustomers.forEach(c => {
+      const net = c.totalReceive - c.totalGive;
+      if (net > 0) {
+        activePabo += net;
+      } else if (net < 0) {
+        activeDibo += Math.abs(net);
+      }
+      totalPaid += c.totalGive;
+    });
+
+    return {
+      totalPabo: activePabo,
+      totalDibo: activeDibo,
+      totalPaid
+    };
+  }, [ledgerCustomers]);
+
+  // Filter ledger list based on search term
+  const filteredLedgerCustomers = React.useMemo(() => {
+    const queryLower = ledgerSearchQuery.toLowerCase().trim();
+    if (!queryLower) return ledgerCustomers;
+
+    return ledgerCustomers.filter(c => 
+      c.name.toLowerCase().includes(queryLower) || 
+      c.phone.includes(queryLower)
+    );
+  }, [ledgerCustomers, ledgerSearchQuery]);
+
   return (
     <div className="min-h-screen bg-[#f8fafc] text-indigo-950 font-sans cursor-default flex flex-col">
       
@@ -650,7 +1165,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
         <div className="bg-gradient-to-r from-amber-500 via-orange-600 to-indigo-700 text-white py-3 px-4 md:px-8 text-center text-xs md:text-sm font-semibold flex flex-col md:flex-row items-center justify-center gap-3 shadow-md relative z-40">
           <span className="flex items-center gap-1.5 font-medium">
             <Sparkles className="w-4 h-4 animate-bounce text-amber-300" />
-            You are exploring the sandbox mode! Register an account to save properties permanently.
+            You are exploring the NextOrder mode! Register an account to save properties permanently.
           </span>
           <button
             type="button"
@@ -745,24 +1260,224 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
                         </div>
                       </div>
 
-                      {/* Account Profiles */}
-                      <div className="bg-slate-50 border border-slate-200/50 p-3 rounded-xl space-y-1.5">
-                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                          {lang === 'bn' ? 'মার্চেন্ট অ্যাকাউন্ট' : 'Merchant Account'}
-                        </span>
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full bg-indigo-50 border border-indigo-150 flex items-center justify-center font-bold text-indigo-700 text-xs uppercase shrink-0">
-                            {(userSession.displayName || 'M')[0]}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h5 className="text-[11.5px] font-bold text-slate-800 truncate leading-snug">
-                              {userSession.displayName || 'Merchant'}
-                            </h5>
-                            <p className="text-[9.5px] font-mono text-slate-500 truncate leading-none">
-                              {userSession.email || 'guest@nextorder.live'}
-                            </p>
-                          </div>
+                      {/* Shops / Business Switcher */}
+                      <div className="border border-indigo-100 p-3 rounded-xl bg-indigo-50/20 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-extrabold text-indigo-900/60 uppercase tracking-wider block">
+                            {lang === 'bn' ? 'আমার ব্যবসা / দোকানসমূহ' : 'My Businesses / Shops'}
+                          </span>
+                          {!showAddShopInput && (
+                            <button
+                              type="button"
+                              onClick={() => setShowAddShopInput(true)}
+                              className="text-[9.5px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 justify-center cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" />
+                              {lang === 'bn' ? 'যোগ করুন' : 'Add Shop'}
+                            </button>
+                          )}
                         </div>
+
+                        {showAddShopInput ? (
+                          <div className="space-y-2 bg-white border border-slate-200/60 p-2.5 rounded-lg">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">
+                              {lang === 'bn' ? 'নতুন দোকানের নাম লিখুন:' : 'New Shop Name:'}
+                            </span>
+                            <div className="flex items-center gap-1.5 font-sans">
+                              <input
+                                type="text"
+                                value={newShopNameInputForm}
+                                onChange={(e) => setNewShopNameInputForm(e.target.value)}
+                                placeholder={lang === 'bn' ? 'যেমন: এলিট ফ্যাশন' : 'e.g. Elite Fashion'}
+                                className="flex-1 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                                maxLength={40}
+                              />
+                            </div>
+                            <div className="flex justify-end gap-1.5 pt-0.5 font-sans">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowAddShopInput(false);
+                                  setNewShopNameInputForm('');
+                                }}
+                                className="px-2 py-1 text-[10px] uppercase font-bold text-slate-500 hover:bg-slate-100 rounded cursor-pointer"
+                              >
+                                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isCreatingShop || !newShopNameInputForm.trim()}
+                                onClick={() => handleCreateShop(newShopNameInputForm)}
+                                className="px-2.5 py-1 bg-indigo-600 text-white text-[10px] uppercase font-bold rounded hover:bg-indigo-700 disabled:opacity-50 cursor-pointer"
+                              >
+                                {isCreatingShop ? '...' : (lang === 'bn' ? 'তৈরি' : 'Create')}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="max-h-36 overflow-y-auto space-y-1 pr-0.5 scrollbar-thin">
+                            {shops.map((s) => {
+                              const isActive = activeShop?.id === s.id;
+                              const isEditing = editingShopId === s.id;
+
+                              if (isEditing) {
+                                return (
+                                  <form
+                                    key={s.id}
+                                    onSubmit={(e) => {
+                                      e.preventDefault();
+                                      handleUpdateSingleShopName(s.id, editingShopName);
+                                    }}
+                                    className="flex items-center gap-1 bg-slate-100 border border-slate-200 p-1.5 rounded-lg w-full"
+                                  >
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      value={editingShopName}
+                                      onChange={(e) => setEditingShopName(e.target.value)}
+                                      className="flex-grow min-w-0 bg-white border border-slate-200 rounded px-2 py-0.5 text-[11px] font-semibold text-slate-800 focus:outline-none focus:border-indigo-500 font-sans"
+                                      maxLength={40}
+                                    />
+                                    <button
+                                      type="submit"
+                                      disabled={isUpdatingShop || !editingShopName.trim()}
+                                      className="p-1 text-emerald-600 hover:bg-emerald-50 rounded cursor-pointer shrink-0 disabled:opacity-50"
+                                      title={lang === 'bn' ? 'সংরক্ষণ' : 'Save'}
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingShopId(null)}
+                                      className="p-1 text-slate-400 hover:bg-slate-200 rounded cursor-pointer shrink-0"
+                                      title={lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </form>
+                                );
+                              }
+
+                              return (
+                                <div
+                                  key={s.id}
+                                  className={`w-full flex items-center justify-between text-left rounded-lg border transition-all text-xs font-bold font-sans ${
+                                    isActive
+                                      ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveShop(s);
+                                      if (isDemo) {
+                                        localStorage.setItem('nextorder_demo_active_shop_id', s.id);
+                                      } else {
+                                        localStorage.setItem(`nextorder_active_shop_id_${userSession.uid}`, s.id);
+                                      }
+                                    }}
+                                    className="flex-1 text-left p-2 flex items-center gap-1.5 min-w-0 cursor-pointer text-xs font-bold font-sans text-inherit bg-transparent border-0"
+                                  >
+                                    <Building2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-indigo-200' : 'text-slate-400'}`} />
+                                    <span className="truncate leading-tight">{s.name}</span>
+                                  </button>
+                                  
+                                  <div className="flex items-center gap-1 pr-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setEditingShopId(s.id);
+                                        setEditingShopName(s.name);
+                                      }}
+                                      className={`p-1.5 rounded transition-all cursor-pointer ${
+                                        isActive 
+                                          ? 'text-indigo-250 hover:bg-indigo-700 hover:text-white' 
+                                          : 'text-slate-400 hover:bg-slate-100 hover:text-slate-650'
+                                      }`}
+                                      title={lang === 'bn' ? 'দোকানের নাম পরিবর্তন করুন' : 'Edit Shop Name'}
+                                    >
+                                      <Edit3 className="w-3 h-3 text-inherit shrink-0" />
+                                    </button>
+                                    {isActive && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Account Profiles */}
+                      <div className="bg-slate-50 border border-slate-200/50 p-3 rounded-xl space-y-1.5 animate-none">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block flex items-center justify-between">
+                          <span>{lang === 'bn' ? 'মার্চেন্ট অ্যাকাউন্ট' : 'Merchant Account'}</span>
+                          {isEditingShopName && (
+                            <span className="text-[8px] text-indigo-600 font-extrabold uppercase tracking-normal animate-pulse">
+                              {lang === 'bn' ? 'সম্পাদনা করা হচ্ছে' : 'Editing'}
+                            </span>
+                          )}
+                        </span>
+                        
+                        {!isEditingShopName ? (
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-indigo-50 border border-indigo-150 flex items-center justify-center font-bold text-indigo-700 text-xs uppercase shrink-0">
+                              {(userSession.displayName || 'M')[0]}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <h5 className="text-[11.5px] font-bold text-slate-800 truncate leading-snug">
+                                  {userSession.displayName || 'Merchant'}
+                                </h5>
+                                <button 
+                                  type="button" 
+                                  onClick={() => {
+                                    setIsEditingShopName(true);
+                                    setNewShopNameInput(userSession.displayName || '');
+                                  }}
+                                  className="text-slate-400 hover:text-indigo-600 active:scale-95 transition-all cursor-pointer shrink-0"
+                                  title={lang === 'bn' ? 'দোকানের নাম পরিবর্তন করুন' : 'Edit Shop Name'}
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              <p className="text-[9.5px] font-mono text-slate-500 truncate leading-none mt-0.5">
+                                {userSession.email || 'guest@nextorder.live'}
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <form onSubmit={handleSaveShopName} className="space-y-2 mt-1">
+                            <input
+                              type="text"
+                              value={newShopNameInput}
+                              onChange={(e) => setNewShopNameInput(e.target.value)}
+                              placeholder={lang === 'bn' ? 'দোকানের নাম লিখুন' : 'Enter shop name'}
+                              required
+                              className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                              maxLength={50}
+                            />
+                            <div className="flex items-center gap-1.5 justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setIsEditingShopName(false)}
+                                className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-md text-[10px] uppercase transition-all cursor-pointer"
+                              >
+                                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={isSavingShopName || !newShopNameInput.trim()}
+                                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-md text-[10px] uppercase shadow-sm transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                              >
+                                {isSavingShopName ? '...' : <Check className="w-3 h-3" />}
+                                {lang === 'bn' ? 'সংরক্ষণ' : 'Save'}
+                              </button>
+                            </div>
+                          </form>
+                        )}
                       </div>
 
                       {/* Power action */}
@@ -776,7 +1491,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
                           className="w-full font-bold py-2.5 px-4 bg-rose-50 hover:bg-rose-100 border border-rose-200/50 hover:border-rose-200 text-rose-600 rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
                         >
                           <LogOut className="w-4 h-4 shrink-0" />
-                          <span>{isDemo ? (lang === 'bn' ? 'স্যান্ডবক্স বন্ধ করুন' : 'Exit Sandbox') : (lang === 'bn' ? 'লগ আউট করুন' : 'Logout Store')}</span>
+                          <span>{isDemo ? (lang === 'bn' ? 'নেক্সটঅর্ডার বন্ধ করুন' : 'Exit NextOrder') : (lang === 'bn' ? 'লগ আউট করুন' : 'Logout Store')}</span>
                         </button>
                       </div>
 
@@ -805,7 +1520,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl tracking-wide font-black text-slate-900">
-              {userSession.displayName || 'Merchant'}! 👋
+              {activeShop ? activeShop.name : (userSession.displayName || 'Merchant')}! 👋
             </h2>
             <p className="text-sm text-slate-500 mt-1 font-medium">
               {lang === 'bn' ? 'আপনার দোকানের পারফরম্যান্স ট্র্যাক করুন এবং গ্রাহকদের ককুরিয়ার ডেলিভারি পরিচালনা করুন।' : 
@@ -923,11 +1638,11 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
         )}
 
         {/* Dynamic Navigation Tabs */}
-        <div className="flex bg-slate-200/60 border border-slate-200/30 p-1.5 rounded-2xl max-w-sm">
+        <div className="flex bg-slate-200/60 border border-slate-200/30 p-1.5 rounded-2xl max-w-md w-full">
           <button
             type="button"
             onClick={() => setActiveTab('orders')}
-            className={`flex-1 py-3 text-center text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+            className={`flex-1 py-2.5 text-center text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
               activeTab === 'orders'
                 ? 'bg-white text-indigo-950 shadow-sm'
                 : 'text-slate-600 hover:text-slate-800'
@@ -939,13 +1654,25 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
           <button
             type="button"
             onClick={() => setActiveTab('products')}
-            className={`flex-1 py-3 text-center text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+            className={`flex-1 py-2.5 text-center text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
               activeTab === 'products'
                 ? 'bg-white text-indigo-950 shadow-sm'
                 : 'text-slate-600 hover:text-slate-800'
             }`}
           >
             {t('products')} ({products.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('ledger')}
+            className={`flex-1 py-2.5 text-center text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+              activeTab === 'ledger'
+                ? 'bg-white text-indigo-950 shadow-sm'
+                : 'text-slate-600 hover:text-slate-800'
+            }`}
+          >
+            {t('ledger')} ({ledgerEntries.length})
           </button>
         </div>
 
@@ -1268,6 +1995,423 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Tab View: TaliKhata Ledger */}
+        {activeTab === 'ledger' && (
+          <div className="space-y-6">
+            {/* Header / Intro section */}
+            <div className="bg-gradient-to-r from-indigo-900 to-indigo-950 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden">
+              <div className="absolute right-0 top-0 translate-x-12 -translate-y-6 opacity-10 pointer-events-none">
+                <FileText className="w-96 h-96" />
+              </div>
+              <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="bg-amber-400 text-indigo-950 text-[10px] uppercase font-black tracking-widest px-2.5 py-1 rounded-full font-mono shadow-sm">
+                      TaliKhata (বাকির খাতা)
+                    </span>
+                  </div>
+                  <h3 className="text-xl md:text-2xl font-black mt-2 font-sans tracking-tight">
+                    {lang === 'bn' ? 'ব্যবসায়িক দেনা-পাওনার হিসাব' : 'Business Credit & Debt Ledger'}
+                  </h3>
+                  <p className="text-xs text-indigo-200/95 mt-1.5 max-w-xl font-medium leading-relaxed">
+                    {lang === 'bn' ? 'আপনার দোকানের কাস্টমারদের বকেয়া বাকি এবং আদায়ের হিসাব রাখুন এক জায়গায়। এক কাস্টমারের নামে যতবার খুশি লেনদেন এন্ট্রি দিয়ে মোট পাওনা একত্রিত হিসাব দেখুন।' : 'Keep track of all customer credits, dues and collections easily. Record multiple due entries under the same customer to see aggregated calculations.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetLedgerForm();
+                    setShowLedgerModal(true);
+                  }}
+                  className="bg-amber-400 hover:bg-amber-300 text-indigo-950 font-black text-xs md:text-sm py-3 px-5 rounded-xl flex items-center gap-2 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 whitespace-nowrap"
+                >
+                  <PlusCircle className="w-5 h-5 text-indigo-950" />
+                  <span>{lang === 'bn' ? 'নতুন লেনদেন লিখুন' : 'New Ledger Entry'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Stats overview */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+              <div className="bg-white rounded-2xl border border-rose-100 shadow-sm p-5 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-500 font-bold flex items-center justify-center text-lg flex-shrink-0 font-mono">
+                  ৳
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider leading-none">{lang === 'bn' ? 'মোট পাওনা (বাকি)' : 'Total Receivable'}</p>
+                  <h4 className="text-lg md:text-xl font-black text-rose-600 mt-1.5 font-mono leading-none">
+                    ৳ {ledgerStats.totalPabo.toLocaleString()}
+                  </h4>
+                  <p className="text-[10px] text-slate-400 mt-1.5">{lang === 'bn' ? 'যা কাস্টমারদের কাছে পাবেন' : 'Owed by active clients'}</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-sky-100 shadow-sm p-5 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-sky-50 text-sky-500 font-bold flex items-center justify-center text-lg flex-shrink-0 font-mono">
+                  ৳
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider leading-none">{lang === 'bn' ? 'অন্যকে পরিশোধ / দেনা' : 'Total Payable'}</p>
+                  <h4 className="text-lg md:text-xl font-black text-sky-600 mt-1.5 font-mono leading-none">
+                    ৳ {ledgerStats.totalDibo.toLocaleString()}
+                  </h4>
+                  <p className="text-[10px] text-slate-400 mt-1.5">{lang === 'bn' ? 'যা কাস্টমারদের ফেরত দিতে হবে' : 'Overpaid collections'}</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-5 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-500 font-bold flex items-center justify-center text-lg flex-shrink-0 font-mono">
+                  ৳
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider leading-none">{lang === 'bn' ? 'মোট আদায়কৃত (জমা)' : 'Total Collected'}</p>
+                  <h4 className="text-lg md:text-xl font-black text-emerald-600 mt-1.5 font-mono leading-none">
+                    ৳ {ledgerStats.totalPaid.toLocaleString()}
+                  </h4>
+                  <p className="text-[10px] text-slate-400 mt-1.5">{lang === 'bn' ? 'মোট পরিশোধিত বিল' : 'Settled dues history'}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Interactive Split panel */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              
+              {/* Left Column: Customers List */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden lg:col-span-5 flex flex-col">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row items-center gap-3">
+                  <div className="relative w-full">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={ledgerSearchQuery}
+                      onChange={(e) => setLedgerSearchQuery(e.target.value)}
+                      placeholder={lang === 'bn' ? 'নাম বা মোবাইল ফোন দিয়ে খুঁজুন...' : 'Search customer name or phone...'}
+                      className="w-full text-xs pl-9 pr-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium"
+                    />
+                    {ledgerSearchQuery && (
+                      <button 
+                        onClick={() => setLedgerSearchQuery('')}
+                        className="text-[10px] text-red-500 hover:underline absolute right-3 top-1/2 -translate-y-1/2"
+                      >
+                        {lang === 'bn' ? 'মুছুন' : 'Clear'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
+                  {filteredLedgerCustomers.length === 0 ? (
+                    <div className="p-10 text-center text-slate-400 text-xs">
+                      {ledgerSearchQuery 
+                        ? (lang === 'bn' ? 'ম্যাচিং কোনো কাস্টমার রেকর্ড পাওয়া যায়নি।' : 'No matching customer found.')
+                        : (lang === 'bn' ? 'এখনো কোনো লেনদেন হিসাব যোগ করা হয়নি।' : 'No customer records yet.')}
+                    </div>
+                  ) : (
+                    filteredLedgerCustomers.map(customer => {
+                      const netBalance = customer.totalReceive - customer.totalGive;
+                      const isSelected = selectedLedgerCustomer === customer.phone;
+
+                      return (
+                        <button
+                          key={customer.phone}
+                          type="button"
+                          onClick={() => {
+                            setSelectedLedgerCustomer(customer.phone);
+                            // Pre-fill modal states if user opens the general modal later
+                            setLedgerCustomerName(customer.name);
+                            setLedgerCustomerPhone(customer.phone);
+                          }}
+                          className={`w-full p-4 flex items-center justify-between text-left transition-all ${
+                            isSelected 
+                              ? 'bg-indigo-50/70 border-l-4 border-indigo-600' 
+                              : 'hover:bg-slate-50/50 border-l-4 border-transparent'
+                          }`}
+                        >
+                          <div className="space-y-1 pr-2">
+                            <h5 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              {customer.name}
+                            </h5>
+                            <p className="text-[11px] text-slate-500 flex items-center gap-1 font-mono font-medium">
+                              <Phone className="w-3.5 h-3.5 text-slate-400" /> {customer.phone}
+                            </p>
+                            <p className="text-[10px] text-slate-400 font-medium">
+                              {lang === 'bn' ? `${customer.entries.length}টি লেনদেনের ইতিহাস` : `${customer.entries.length} transaction entries`}
+                            </p>
+                          </div>
+
+                          <div className="text-right flex flex-col items-end gap-1 flex-shrink-0">
+                            {netBalance > 0 ? (
+                              <span className="text-[11px] font-black font-mono text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-2 py-1 leading-none">
+                                {lang === 'bn' ? 'পাবেন ৳' : 'Recv ৳'} {netBalance.toLocaleString()}
+                              </span>
+                            ) : netBalance < 0 ? (
+                              <span className="text-[11px] font-black font-mono text-sky-600 bg-sky-55 border border-sky-100 rounded-lg px-2 py-1 leading-none">
+                                {lang === 'bn' ? 'দেনা ৳' : 'Give ৳'} {Math.abs(netBalance).toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-black text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-lg px-2 py-1 leading-none uppercase">
+                                {lang === 'bn' ? 'পরিশোধিত' : 'Settled'}
+                              </span>
+                            )}
+                            <span className="text-[9px] text-slate-400 font-mono">
+                              {customer.latestDate}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Customer Details history */}
+              <div className="lg:col-span-7">
+                {(() => {
+                  const activeCustomer = ledgerCustomers.find(c => c.phone === selectedLedgerCustomer);
+                  if (!activeCustomer) {
+                    return (
+                      <div className="bg-slate-50/80 rounded-2xl border-2 border-dashed border-slate-200 p-12 text-center text-slate-400">
+                        <div className="bg-slate-100 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-3">
+                          <FileText className="w-6 h-6 text-slate-400 animate-bounce" />
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-800">
+                          {lang === 'bn' ? 'কোনো গ্রাহক সিলেক্ট করা হয়নি' : 'No Customer Selected'}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 mt-1 max-w-xs mx-auto leading-relaxed">
+                          {lang === 'bn' ? 'বাম পাশের তালিকা থেকে যেকোনো কাস্টমার নামের উপর ক্লিক করে তার বকেয়া এবং আদায়ের বিস্তারিত লেজার বই দেখুন।' : 'Click on a customer from the left list to view their complete credit timeline.'}
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  const customerNet = activeCustomer.totalReceive - activeCustomer.totalGive;
+
+                  return (
+                    <div className="space-y-6">
+                      {/* Customer Summary / Quick Info Card */}
+                      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
+                          <div>
+                            <span className="text-[9px] bg-indigo-50 border border-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-mono font-black uppercase">
+                              Active Case Summary
+                            </span>
+                            <h4 className="text-sm font-black text-slate-900 mt-1.5 flex items-center gap-1.5">
+                              {activeCustomer.name}
+                            </h4>
+                            <p className="text-xs text-slate-500 font-mono flex items-center gap-1 mt-0.5 font-medium">
+                              <Phone className="w-3.5 h-3.5 text-slate-400" /> {activeCustomer.phone}
+                            </p>
+                          </div>
+                          
+                          <div className="text-left sm:text-right flex flex-col sm:items-end">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider leading-none">{lang === 'bn' ? 'বর্তমান নেট স্থিতি' : 'Net Account Status'}</span>
+                            <div className="mt-1.5">
+                              {customerNet > 0 ? (
+                                <p className="text-lg font-black font-mono text-rose-600 leading-none">
+                                  {lang === 'bn' ? 'পাবেন ৳' : 'Receivable ৳'} {customerNet.toLocaleString()}
+                                </p>
+                              ) : customerNet < 0 ? (
+                                <p className="text-lg font-black font-mono text-sky-600 leading-none">
+                                  {lang === 'bn' ? 'দেনা ৳' : 'Payable ৳'} {Math.abs(customerNet).toLocaleString()}
+                                </p>
+                              ) : (
+                                <p className="text-lg font-black text-emerald-600 flex items-center gap-1 leading-none">
+                                  <CheckCircle className="w-5 h-5 text-emerald-500" /> {lang === 'bn' ? 'পরিশোধিত' : 'Fully Settled'}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Inline QUICK TRANSACTION form (Handles: "ekjon ar theke joto bar baki nibe toto bar likhe rakte parbe") */}
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            const targetInput = e.currentTarget.elements.namedItem('quickAmount') as HTMLInputElement;
+                            const targetReason = e.currentTarget.elements.namedItem('quickReason') as HTMLInputElement;
+                            const targetType = e.currentTarget.elements.namedItem('quickType') as HTMLSelectElement;
+                            const targetDate = e.currentTarget.elements.namedItem('quickDate') as HTMLInputElement;
+
+                            const amt = Number(targetInput.value);
+                            const rsn = targetReason.value.trim() || '';
+                            const typ = targetType.value as 'receive' | 'give';
+                            const dt = targetDate.value || new Date().toISOString().split('T')[0];
+
+                            if (!amt || amt <= 0) {
+                              alert(lang === 'bn' ? 'দয়া করে সঠিক অংক লিখুন!' : 'Please fill a valid amount!');
+                              return;
+                            }
+
+                            setIsSavingLedger(true);
+
+                            const newEntryId = 'ledger_' + Math.random().toString(36).substring(2, 11);
+                            const newEntry: LedgerEntry = {
+                              id: newEntryId,
+                              userId: isDemo ? 'demo' : userSession.uid,
+                              shopId: activeShop.id,
+                              customerName: activeCustomer.name,
+                              customerPhone: activeCustomer.phone,
+                              type: typ,
+                              amount: amt,
+                              reason: rsn || (typ === 'receive' ? (lang === 'bn' ? 'সাধারণ বাকি' : 'General Credit') : (lang === 'bn' ? 'জমা / পরিশোধ' : 'Payment Collection')),
+                              entryDate: dt,
+                              createdAt: new Date().toISOString(),
+                              updatedAt: new Date().toISOString()
+                            };
+
+                            if (isDemo) {
+                              const updatedEntries = [newEntry, ...allLedgerEntries];
+                              setAllLedgerEntries(updatedEntries);
+                              localStorage.setItem('nextorder_demo_ledger_entries', JSON.stringify(updatedEntries));
+                              setIsSavingLedger(false);
+                              targetInput.value = '';
+                              targetReason.value = '';
+                            } else {
+                              try {
+                                await setDoc(doc(db, 'ledger', newEntryId), newEntry);
+                                targetInput.value = '';
+                                targetReason.value = '';
+                              } catch (err) {
+                                console.error("Error Quick Add Ledger:", err);
+                                alert('Error adding entry list');
+                              } finally {
+                                setIsSavingLedger(false);
+                              }
+                            }
+                          }}
+                          className="bg-slate-50 border border-slate-200/60 rounded-xl p-4 text-xs space-y-3"
+                        >
+                          <h5 className="font-bold text-slate-800 flex items-center gap-1.5 leading-none">
+                            <Plus className="w-4 h-4 text-indigo-600" />
+                            {lang === 'bn' ? `এই গ্রাহকের জন্য আরেকটি লেনদেন যোগ করুন` : `Record another transaction for ${activeCustomer.name}`}
+                          </h5>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-slate-500 uppercase font-semibold leading-none">{lang === 'bn' ? 'লেনদেনের ধরণ' : 'Type'}</label>
+                              <select
+                                name="quickType"
+                                className="w-full p-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 font-medium cursor-pointer text-xs"
+                              >
+                                <option value="receive">{lang === 'bn' ? 'বাকি নিয়েছেন' : 'Took Due (Recv)'}</option>
+                                <option value="give">{lang === 'bn' ? 'জমা / পরিশোধ' : 'Paid (Give)'}</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-slate-500 uppercase font-semibold leading-none">{lang === 'bn' ? 'টাকার পরিমাণ *' : 'Amount (৳) *'}</label>
+                              <input
+                                type="number"
+                                required
+                                name="quickAmount"
+                                placeholder="e.g. 500"
+                                min="1"
+                                className="w-full p-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 font-medium text-xs font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-1 sm:col-span-1">
+                              <label className="text-[10px] text-slate-500 uppercase font-semibold leading-none">{lang === 'bn' ? 'লেনদেনের তারিখ' : 'Date'}</label>
+                              <input
+                                type="date"
+                                required
+                                name="quickDate"
+                                defaultValue={new Date().toISOString().split('T')[0]}
+                                className="w-full p-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 font-medium text-xs font-mono"
+                              />
+                            </div>
+
+                            <div>
+                              <button
+                                type="submit"
+                                disabled={isSavingLedger}
+                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-center cursor-pointer transition-all disabled:opacity-50 text-xs"
+                              >
+                                {isSavingLedger ? '...' : (lang === 'bn' ? 'যুক্ত করুন' : 'Add Entry')}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1 pt-1">
+                            <label className="text-[10px] text-slate-500 uppercase font-semibold leading-none">{lang === 'bn' ? 'লেনদেনের কারণ / বিবরণ (যেমন: শার্ট বাকি / বকেয়া বিল শোধ)' : 'Transaction Reason/Details'}</label>
+                            <input
+                              type="text"
+                              name="quickReason"
+                              placeholder={lang === 'bn' ? 'যেমন: শার্ট বাকি বা ক্যাশ শোধ' : 'e.g. Bought shirt or Bkash cash collection'}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 font-medium text-xs text-sans"
+                            />
+                          </div>
+                        </form>
+                      </div>
+
+                      {/* Transaction entries timeline */}
+                      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-1.5 leading-none">
+                            <Calendar className="w-4 h-4 text-indigo-500" />
+                            {lang === 'bn' ? 'লেনদেনের সম্পূর্ণ খতিয়ান' : 'Complete Credit Timeline'}
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-medium leading-none">
+                            {lang === 'bn' ? 'মোট লেনদেন:' : 'Transactions:'} {activeCustomer.entries.length}
+                          </span>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs text-slate-600">
+                            <thead>
+                              <tr className="border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 bg-slate-50/50">
+                                <th className="p-2 px-3">{lang === 'bn' ? 'তারিখ' : 'Date'}</th>
+                                <th className="p-2">{lang === 'bn' ? 'বিবরণ' : 'Description'}</th>
+                                <th className="p-2">{lang === 'bn' ? 'ধরণ' : 'Type'}</th>
+                                <th className="p-2 text-right">{lang === 'bn' ? 'টাকা (৳)' : 'Amount'}</th>
+                                <th className="p-2 text-center w-10"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-medium text-xs">
+                              {activeCustomer.entries.map(entry => (
+                                <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="p-2 px-3 font-mono text-slate-500 whitespace-nowrap">{entry.entryDate}</td>
+                                  <td className="p-2 text-slate-900 leading-normal max-w-[180px] break-words font-sans">
+                                    {entry.reason}
+                                  </td>
+                                  <td className="p-2">
+                                    {entry.type === 'receive' ? (
+                                      <span className="text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-100 rounded px-1.5 py-0.5 uppercase whitespace-nowrap leading-none">
+                                        {lang === 'bn' ? 'বাকি (Due)' : 'Due'}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 rounded px-1.5 py-0.5 uppercase whitespace-nowrap leading-none">
+                                        {lang === 'bn' ? 'জমা (Paid)' : 'Paid'}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-2 text-right font-black font-mono text-slate-900 whitespace-nowrap">
+                                    ৳ {entry.amount.toLocaleString()}
+                                  </td>
+                                  <td className="p-2 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteLedgerEntry(entry.id)}
+                                      className="p-1 hover:bg-rose-50 rounded text-slate-400 hover:text-red-500 transition-all cursor-pointer"
+                                      title={lang === 'bn' ? 'ডিলিট করুন' : 'Delete Entry'}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
           </div>
         )}
 
@@ -1828,6 +2972,132 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
 
               </form>
 
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ================= MODAL: ADD LEDGER ENTRY ================= */}
+      <AnimatePresence>
+        {showLedgerModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-slate-100 overflow-hidden flex flex-col my-8"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-2.5">
+                  <div className="bg-amber-100 p-2.5 rounded-xl text-amber-700">
+                    <FileText className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">
+                      {lang === 'bn' ? 'নতুন লেনদেনের হিসাব লিখুন' : 'New Credit / Debt Record'}
+                    </h3>
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      {lang === 'bn' ? 'তালিখাতার প্রতিটি তথ্য নির্ভুলভাবে লিখে রাখুন।' : 'Fill out exact credentials to persist in TaliKhata books'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLedgerModal(false)}
+                  className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Form body */}
+              <form onSubmit={handleCreateLedgerEntry} className="p-6 space-y-4 text-xs font-semibold">
+                
+                {/* Form fields */}
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'কাস্টমার / পার্টির নাম *' : 'Party / Customer Name *'}</label>
+                  <input
+                    type="text"
+                    required
+                    value={ledgerCustomerName}
+                    onChange={(e) => setLedgerCustomerName(e.target.value)}
+                    placeholder={lang === 'bn' ? 'যেমন: আবুল কালাম' : 'e.g., Abul Kalam'}
+                    className="w-full pl-3 pr-3 py-2.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium font-sans text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'মোবাইল ফোন নম্বর *' : 'Customer Phone Number *'}</label>
+                  <input
+                    type="tel"
+                    required
+                    value={ledgerCustomerPhone}
+                    onChange={(e) => setLedgerCustomerPhone(e.target.value)}
+                    placeholder={lang === 'bn' ? 'যেমন: ০১৭১১২২২৩৩৪' : 'e.g., 01711122233'}
+                    className="w-full pl-3 pr-3 py-2.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium font-mono text-xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'লেনদেনের ধরন *' : 'Transaction Type *'}</label>
+                    <select
+                      value={ledgerType}
+                      onChange={(e) => setLedgerType(e.target.value as 'receive' | 'give')}
+                      className="w-full p-2.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium cursor-pointer text-xs"
+                    >
+                      <option value="receive">{lang === 'bn' ? 'পাবো / বাকি (Receivable)' : 'Due (Receivable)'}</option>
+                      <option value="give">{lang === 'bn' ? 'দিলো / আদায় (Payment)' : 'Paid (Payment)'}</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'টাকার পরিমাণ (৳) *' : 'Amount in Taka (৳) *'}</label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={ledgerAmount || ''}
+                      onChange={(e) => setLedgerAmount(Number(e.target.value))}
+                      placeholder="e.g. 1200"
+                      className="w-full pl-3 pr-3 py-2.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium font-mono text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'লেনদেনের তারিখ *' : 'Transaction Date *'}</label>
+                  <input
+                    type="date"
+                    required
+                    value={ledgerDate}
+                    onChange={(e) => setLedgerDate(e.target.value)}
+                    className="w-full pl-3 pr-3 py-2.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium font-mono text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] text-slate-500 uppercase">{lang === 'bn' ? 'বিবরণ / কেন বাকি নিলেন' : 'Reason / Item Details'}</label>
+                  <textarea
+                    rows={2}
+                    value={ledgerReason}
+                    onChange={(e) => setLedgerReason(e.target.value)}
+                    placeholder={lang === 'bn' ? 'যেমন: ২ কালার কাপড়ের শার্ট বাকিতে ক্রয় করেছেন।' : 'e.g. Bought 2 cotton shirts on credit.'}
+                    className="w-full pl-3 pr-3 py-2 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium font-sans resize-none text-xs"
+                  />
+                </div>
+
+                {/* Submit button */}
+                <button
+                  type="submit"
+                  disabled={isSavingLedger}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-all border border-transparent cursor-pointer text-center text-xs uppercase tracking-widest flex items-center justify-center gap-2 mt-2 disabled:bg-slate-350 disabled:text-slate-500"
+                >
+                  {isSavingLedger ? '...' : (lang === 'bn' ? 'লগ এন্ট্রি রেজিস্টার করুন' : 'Confirm Ledger Log Entry')}
+                </button>
+
+              </form>
             </motion.div>
           </div>
         )}
@@ -2399,7 +3669,7 @@ export default function Dashboard({ userSession, onExitDemo }: DashboardProps) {
                   </td>
                   <td style={{ width: '50%', verticalAlign: 'top', paddingLeft: '10px' }}>
                     <div style={{ fontWeight: 'bold', borderBottom: '1px solid #000', marginBottom: '4px', paddingBottom: '2px' }}>Sender Merchant Info:</div>
-                    <div style={{ fontWeight: 'bold', margin: '3px 0' }}>{userSession.displayName}</div>
+                    <div style={{ fontWeight: 'bold', margin: '3px 0' }}>{activeShop ? activeShop.name : userSession.displayName}</div>
                     <div style={{ fontSize: '10px', color: '#555' }}>NextOrder Business User</div>
                     <div style={{ fontSize: '10px', color: '#555' }}>{userSession.email}</div>
                     <div style={{ fontSize: '9px', color: '#888', marginTop: '12px' }}>NextOrder Live Tracking Platform</div>

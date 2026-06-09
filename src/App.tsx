@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User, updateProfile } from 'firebase/auth';
 import { auth } from './firebase';
 import AuthScreens from './components/AuthScreens';
 import Dashboard from './components/Dashboard';
@@ -12,6 +12,9 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
+  const [customDisplayName, setCustomDisplayName] = useState<string | null>(() => {
+    return localStorage.getItem('nextorder_custom_shop_name');
+  });
 
   // Auth State Listener
   useEffect(() => {
@@ -21,6 +24,10 @@ export default function App() {
       // Automatically disable demo mode if real login is detected
       if (firebaseUser) {
         setDemoMode(false);
+        setCustomDisplayName(firebaseUser.displayName || null);
+      } else {
+        const savedDemoName = localStorage.getItem('nextorder_custom_shop_name');
+        setCustomDisplayName(savedDemoName || null);
       }
     });
 
@@ -66,23 +73,32 @@ export default function App() {
       return {
         uid: user.uid,
         email: user.email,
-        displayName: user.displayName || 'Honored Merchant',
+        displayName: customDisplayName || user.displayName || 'Honored Merchant',
         isDemo: false
       };
     }
     return {
       uid: 'demo',
       email: 'guest@nextorder.live',
-      displayName: 'Demo Merchant',
+      displayName: customDisplayName || 'Demo Merchant',
       isDemo: true
     };
+  };
+
+  const handleUpdateShopName = async (newName: string) => {
+    if (user) {
+      await updateProfile(user, { displayName: newName });
+    } else {
+      localStorage.setItem('nextorder_custom_shop_name', newName);
+    }
+    setCustomDisplayName(newName);
   };
 
   return (
     <div className="min-h-screen bg-slate-50 overflow-x-hidden">
       <AnimatePresence mode="wait">
         
-        {/* Real Authenticated Dashboard or Activated Sandbox demo mode */}
+        {/* Real Authenticated Dashboard or Activated NextOrder demo mode */}
         {(user || demoMode) ? (
           <motion.div
             key="dashboard-view"
@@ -94,6 +110,7 @@ export default function App() {
             <Dashboard 
               userSession={getSession()} 
               onExitDemo={() => setDemoMode(false)} 
+              onUpdateShopName={handleUpdateShopName}
             />
           </motion.div>
         ) : (
