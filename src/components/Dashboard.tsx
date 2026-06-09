@@ -1183,9 +1183,6 @@ export default function Dashboard({ userSession, onExitDemo, onUpdateShopName }:
           
           <div className="flex items-center gap-3">
             <NextOrderLogo lang={lang} size={44} />
-            <span className="hidden sm:inline-block text-[9.5px] font-extrabold bg-indigo-50 border border-indigo-150 text-indigo-700 px-2 py-0.5 rounded-lg uppercase tracking-wider">
-              {lang === 'bn' ? 'ড্যাশবোর্ড' : 'Dashboard'}
-            </span>
           </div>
 
           <div className="flex items-center gap-4">
