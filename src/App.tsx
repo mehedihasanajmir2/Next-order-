@@ -11,10 +11,19 @@ import { Sparkles, Building2 } from 'lucide-react';
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [splashLoading, setSplashLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
   const [customDisplayName, setCustomDisplayName] = useState<string | null>(() => {
     return localStorage.getItem('nextorder_custom_shop_name');
   });
+
+  // Splash timeout to ensure minimum 2-second loader experience as requested by user
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSplashLoading(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Auth State Listener
   useEffect(() => {
@@ -34,7 +43,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  if (authLoading) {
+  if (authLoading || splashLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center font-sans tracking-tight text-slate-800">
         <motion.div
@@ -46,7 +55,7 @@ export default function App() {
             <NextOrderLogo size={54} />
           </div>
           <div>
-            <p className="text-xs text-slate-405 font-bold font-mono tracking-widest uppercase">Loading Business Workspace...</p>
+            <p className="text-xs text-slate-400 font-bold font-mono tracking-widest uppercase">Loading Business Workspace...</p>
           </div>
           <div className="w-20 h-1 bg-slate-200 rounded-full mt-2 overflow-hidden relative">
             <div className="absolute left-0 top-0 bottom-0 bg-indigo-600 rounded-full w-1/3 animate-infinite" style={{
